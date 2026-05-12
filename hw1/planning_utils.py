@@ -7,8 +7,8 @@ def traverse(goal_state, prev):
     (goal_state, None)
     '''
     result = [(goal_state, None)]
-    # remove the following line and complete the algorithm
-    assert False
+    while prev[result[-1][0].to_string()] is not None:
+        result.append(prev[result[-1][0].to_string()])
     return result
 
 

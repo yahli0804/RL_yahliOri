@@ -1,5 +1,5 @@
-from hw1.puzzle import *
-from hw1.planning_utils import *
+from puzzle import *
+from planning_utils import *
 import heapq
 import datetime
 
@@ -28,8 +28,30 @@ def dijkstra(puzzle):
     prev = {initial.to_string(): None}
 
     while len(fringe) > 0:
-        # remove the following line and complete the algorithm
-        assert False
+        # remove the item with the smallest distance from the fringe
+        current_min_dist, current_state = heapq.heappop(fringe)
+        current_state_str = current_state.to_string()
+
+        if current_state_str in concluded:
+            continue
+
+        if current_state.is_same(goal):
+            break
+
+        # add the current state to concluded
+        concluded.add(current_state_str)
+
+        # for each action applicable in the current state, compute the new state and update distances and prev accordingly
+        for a in current_state.get_actions():
+            new_state = current_state.apply_action(a)
+            new_state_str = new_state.to_string()
+            if new_state_str in concluded:
+                continue
+            new_distance = distances[current_state_str] + new_state.get_manhattan_distance(current_state)
+            if new_state_str not in distances or new_distance < distances[new_state_str]:
+                distances[new_state_str] = new_distance
+                prev[new_state_str] = (current_state, a)
+                heapq.heappush(fringe, (new_distance, new_state))
     return prev
 
 

@@ -1,4 +1,4 @@
-from hw1.state import State
+from state import State
 
 
 class Puzzle:
