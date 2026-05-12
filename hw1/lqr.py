@@ -1,5 +1,5 @@
 import numpy as np
-from cartpole_cont import CartPoleContEnv
+from hw1.cartpole_cont import CartPoleContEnv
 
 
 def get_A(cart_pole_env):

@@ -1,5 +1,5 @@
-from puzzle import *
-from planning_utils import *
+from hw1.puzzle import *
+from hw1.planning_utils import *
 import heapq
 import datetime
 
