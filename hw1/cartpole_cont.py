@@ -3,6 +3,7 @@ import gym
 from gym import spaces
 from gym.utils import seeding
 import numpy as np
+import importlib
 
 
 class CartPoleContEnv(gym.Env):
@@ -37,6 +38,9 @@ class CartPoleContEnv(gym.Env):
 
         self.seed()
         self.viewer = None
+        # pygame-based renderer (used when Gym's legacy rendering utilities are unavailable)
+        self._pygame_screen = None
+        self._pygame_clock = None
         self.state = None
         self.planning_steps_counter = None
 
@@ -95,52 +99,130 @@ class CartPoleContEnv(gym.Env):
         cartwidth = 50.0
         cartheight = 30.0
 
-        if self.viewer is None:
-            from gym.envs.classic_control import rendering
-            self.viewer = rendering.Viewer(screen_width, screen_height)
-            l, r, t, b = -cartwidth / 2, cartwidth / 2, cartheight / 2, -cartheight / 2
-            axleoffset = cartheight / 4.0
-            cart = rendering.FilledPolygon([(l, b), (l, t), (r, t), (r, b)])
-            self.carttrans = rendering.Transform()
-            cart.add_attr(self.carttrans)
-            self.viewer.add_geom(cart)
-            l, r, t, b = -polewidth / 2, polewidth / 2, polelen - polewidth / 2, -polewidth / 2
-            pole = rendering.FilledPolygon([(l, b), (l, t), (r, t), (r, b)])
-            pole.set_color(.8, .6, .4)
-            self.poletrans = rendering.Transform(translation=(0, axleoffset))
-            pole.add_attr(self.poletrans)
-            pole.add_attr(self.carttrans)
-            self.viewer.add_geom(pole)
-            self.axle = rendering.make_circle(polewidth / 2)
-            self.axle.add_attr(self.poletrans)
-            self.axle.add_attr(self.carttrans)
-            self.axle.set_color(.5, .5, .8)
-            self.viewer.add_geom(self.axle)
-            self.track = rendering.Line((0, carty), (screen_width, carty))
-            self.track.set_color(0, 0, 0)
-            self.viewer.add_geom(self.track)
+        # Try Gym's legacy viewer-based rendering if it exists; otherwise fall back to pygame.
+        if self.viewer is None and self._pygame_screen is None:
+            try:
+                rendering = importlib.import_module('gym.envs.classic_control.rendering')
+            except ModuleNotFoundError:
+                rendering = None
 
-            self._pole_geom = pole
+            if rendering is not None:
+                self.viewer = rendering.Viewer(screen_width, screen_height)
+                l, r, t, b = -cartwidth / 2, cartwidth / 2, cartheight / 2, -cartheight / 2
+                axleoffset = cartheight / 4.0
+                cart = rendering.FilledPolygon([(l, b), (l, t), (r, t), (r, b)])
+                self.carttrans = rendering.Transform()
+                cart.add_attr(self.carttrans)
+                self.viewer.add_geom(cart)
+                l, r, t, b = -polewidth / 2, polewidth / 2, polelen - polewidth / 2, -polewidth / 2
+                pole = rendering.FilledPolygon([(l, b), (l, t), (r, t), (r, b)])
+                pole.set_color(.8, .6, .4)
+                self.poletrans = rendering.Transform(translation=(0, axleoffset))
+                pole.add_attr(self.poletrans)
+                pole.add_attr(self.carttrans)
+                self.viewer.add_geom(pole)
+                self.axle = rendering.make_circle(polewidth / 2)
+                self.axle.add_attr(self.poletrans)
+                self.axle.add_attr(self.carttrans)
+                self.axle.set_color(.5, .5, .8)
+                self.viewer.add_geom(self.axle)
+                self.track = rendering.Line((0, carty), (screen_width, carty))
+                self.track.set_color(0, 0, 0)
+                self.viewer.add_geom(self.track)
+                self._pole_geom = pole
+            else:
+                # pygame fallback (works on modern Gym setups that removed the legacy rendering module)
+                try:
+                    import pygame
+                except ImportError as e:
+                    raise ImportError(
+                        "Rendering requires either Gym's legacy classic_control.rendering module "
+                        "or the 'pygame' package. Install pygame via: pip install pygame"
+                    ) from e
+
+                pygame.init()
+                self._pygame_screen = pygame.display.set_mode((screen_width, screen_height))
+                pygame.display.set_caption('CartPoleContEnv')
+                self._pygame_clock = pygame.time.Clock()
 
         if self.state is None: return None
 
-        # Edit the pole polygon vertex
-        pole = self._pole_geom
-        l, r, t, b = -polewidth / 2, polewidth / 2, polelen - polewidth / 2, -polewidth / 2
-        pole.v = [(l, b), (l, t), (r, t), (r, b)]
+        # --- Path 1: legacy Gym viewer ---
+        if self.viewer is not None:
+            # Edit the pole polygon vertex
+            pole = self._pole_geom
+            l, r, t, b = -polewidth / 2, polewidth / 2, polelen - polewidth / 2, -polewidth / 2
+            pole.v = [(l, b), (l, t), (r, t), (r, b)]
 
-        x = self.state
-        cartx = x[0] * scale + screen_width / 2.0  # MIDDLE OF CART
+            x = self.state
+            cartx = x[0] * scale + screen_width / 2.0  # MIDDLE OF CART
+            cartx %= screen_width
+            self.carttrans.set_translation(cartx, carty)
+            self.poletrans.set_rotation(-x[2])
+            return self.viewer.render(return_rgb_array=mode == 'rgb_array')
+
+        # --- Path 2: pygame fallback ---
+        import pygame
+
+        # Handle window events so the OS doesn't think the app hung.
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.close()
+                return None
+
+        # Background
+        self._pygame_screen.fill((255, 255, 255))
+
+        # Track
+        pygame.draw.line(self._pygame_screen, (0, 0, 0), (0, carty), (screen_width, carty), 2)
+
+        x, x_dot, theta, theta_dot = self.state
+        cartx = x * scale + screen_width / 2.0
         cartx %= screen_width
-        self.carttrans.set_translation(cartx, carty)
-        self.poletrans.set_rotation(-x[2])
 
-        return self.viewer.render(return_rgb_array=mode == 'rgb_array')
+        # Cart rectangle
+        cart_left = cartx - cartwidth / 2.0
+        cart_top = carty - cartheight / 2.0
+        cart_rect = pygame.Rect(int(cart_left), int(cart_top), int(cartwidth), int(cartheight))
+        pygame.draw.rect(self._pygame_screen, (0, 0, 0), cart_rect, 0)
+
+        # Pole as a thick line (simple + robust)
+        axle_x = cartx
+        axle_y = carty - cartheight / 4.0
+        tip_x = axle_x + polelen * math.sin(theta)
+        tip_y = axle_y - polelen * math.cos(theta)
+        pygame.draw.line(
+            self._pygame_screen,
+            (204, 153, 102),
+            (int(axle_x), int(axle_y)),
+            (int(tip_x), int(tip_y)),
+            int(polewidth),
+        )
+
+        # Axle
+        pygame.draw.circle(self._pygame_screen, (128, 128, 204), (int(axle_x), int(axle_y)), int(polewidth / 2))
+
+        if mode == 'human':
+            pygame.display.flip()
+            self._pygame_clock.tick(self.metadata.get('video.frames_per_second', 50))
+            return None
+        elif mode == 'rgb_array':
+            # (W, H, C) -> (H, W, C)
+            arr = pygame.surfarray.array3d(self._pygame_screen)
+            return np.transpose(arr, (1, 0, 2))
+        else:
+            raise ValueError(f"Unsupported render mode: {mode}")
 
     def close(self):
         if self.viewer:
             self.viewer.close()
             self.viewer = None
+        if self._pygame_screen is not None:
+            import pygame
+            pygame.display.quit()
+            pygame.quit()
+            self._pygame_screen = None
+            self._pygame_clock = None
 
 
 if __name__ == '__main__':
@@ -150,7 +232,7 @@ if __name__ == '__main__':
     env.render()
     is_done = False
     while not is_done:
-        _, r, is_done, _ = env.step(np.array([0.0]))
+        _, r, is_done, _ = env.step(np.array([0.0], dtype=np.float32))
         env.render()
         print(r)
     # run random forces
