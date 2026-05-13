@@ -100,7 +100,7 @@ def find_lqr_control_input(cart_pole_env):
         [0, 0, 0, 0.01]
     ])
 
-    R = np.matrix([0.05])
+    R = np.matrix([3])
 
     # TODO - you need to compute these matrices in your solution, but these are not returned.
     Ps = [None] * (cart_pole_env.planning_steps+1)
@@ -113,8 +113,9 @@ def find_lqr_control_input(cart_pole_env):
     # that produce float32 clipped actions when used in the provided main loop.
     K_mats = []
     Ks = []
-    low = cart_pole_env.action_space.low.item(0)+1
-    high = cart_pole_env.action_space.high.item(0)-1
+    low = cart_pole_env.action_space.low.item(0)
+    high = cart_pole_env.action_space.high.item(0)
+    action_dtype = cart_pole_env.action_space.dtype
     for i in range(cart_pole_env.planning_steps):
         K = -np.linalg.inv(R + B.T * Ps[i+1] * B) * B.T * Ps[i+1] * A
         K_mats.append(K)
@@ -125,7 +126,8 @@ def find_lqr_control_input(cart_pole_env):
         u = K_mats[i] * xs[i]
         u_scalar = float(u.item(0))
         u_scalar = max(low, min(high, u_scalar))
-        u_clipped = np.matrix([[u_scalar]])
+        # Store as float32 so that `us[i].item(0)` is a float32 scalar.
+        u_clipped = np.array([[u_scalar]], dtype=action_dtype)
         us.append(u_clipped)
         xs.append(A * xs[i] + B * u_clipped)
 
@@ -162,10 +164,11 @@ def run_lqr_episode_and_log_theta(initial_theta, render=False):
     is_done = False
     iteration = 0
     while not is_done:
-        # Compute action from actual visited state
+        # Use the planned open-loop control sequence `us`.
         actual_action = (Ks[iteration] * np.expand_dims(actual_state, 1)).item(0)
-        # (Ks wrapper ensures action is clipped + float32 for Gym Box)
-        actual_state, reward, is_done, _ = env.step(np.array([actual_action]))
+        # Make sure the action matches the env's Box requirements.
+        actual_action = max(env.action_space.low.item(0), min(env.action_space.high.item(0), actual_action))
+        actual_state, reward, is_done, _ = env.step(np.array([actual_action], dtype=env.action_space.dtype))
         thetas.append(float(actual_state[2]))
         if render:
             env.render()
@@ -175,8 +178,14 @@ def run_lqr_episode_and_log_theta(initial_theta, render=False):
     return thetas
 
 
-if __name__ == '__main__':
-    import matplotlib.pyplot as plt
+def plot_theta_over_time():
+    """Plot theta(t) for initial theta = 0.1π, 0.16π, 0.32π."""
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as e:
+        raise ImportError(
+            "matplotlib is required for plotting. Install it with: pip install matplotlib"
+        ) from e
 
     thetas_01pi = run_lqr_episode_and_log_theta(initial_theta=0.1 * np.pi, render=False)
     thetas_016pi = run_lqr_episode_and_log_theta(initial_theta=0.16 * np.pi, render=False)
@@ -193,4 +202,53 @@ if __name__ == '__main__':
     plt.grid(True)
     plt.tight_layout()
     plt.show()
+
+
+if __name__ == '__main__':
+    import sys
+
+    # Default: plot theta over time (no rendering window).
+    # Use `--render` to watch the cart move.
+    if '--render' not in sys.argv:
+        plot_theta_over_time()
+        raise SystemExit(0)
+
+    env = CartPoleContEnv(initial_theta=np.pi * 0.15)
+    # the following is an example to start at a different theta
+    # env = CartPoleContEnv(initial_theta=np.pi * 0.25)
+
+    # print the matrices used in LQR
+    print('A: {}'.format(get_A(env)))
+    print('B: {}'.format(get_B(env)))
+
+    # start a new episode
+    actual_state = env.reset()
+    env.render()
+    # use LQR to plan controls
+    xs, us, Ks = find_lqr_control_input(env)
+    # run the episode until termination, and print the difference between planned and actual
+    is_done = False
+    iteration = 0
+    is_stable_all = []
+    while not is_done:
+        # print the differences between planning and execution time
+        predicted_theta = xs[iteration].item(2)
+        actual_theta = actual_state[2]
+        predicted_action = us[iteration].item(0)
+        actual_action = (Ks[iteration] * np.expand_dims(actual_state, 1)).item(0)
+        print_diff(iteration, predicted_theta, actual_theta, predicted_action, actual_action)
+        # apply action according to actual state visited
+        # make action in range
+        actual_action = max(env.action_space.low.item(0), min(env.action_space.high.item(0), actual_action))
+        actual_action = np.array([actual_action], dtype=env.action_space.dtype)
+        actual_state, reward, is_done, _ = env.step(actual_action)
+        is_stable = reward == 1.0
+        is_stable_all.append(is_stable)
+        env.render()
+        iteration += 1
+    env.close()
+    # we assume a valid episode is an episode where the agent managed to stabilize the pole for the last 100 time-steps
+    valid_episode = np.all(is_stable_all[-100:])
+    # print if LQR succeeded
+    print('valid episode: {}'.format(valid_episode))
 
